@@ -1,16 +1,7 @@
-import contextlib
 import itertools
-import json
 import logging
-import os
-from typing import Literal
-
-import googleapiclient.discovery
 import pandas as pd
 from datetime import datetime
-from googleapiclient.errors import HttpError
-
-from tqdm.auto import tqdm
 import yake
 
 from concurrent.futures import ProcessPoolExecutor
@@ -185,7 +176,8 @@ def community_based_search(*,
 
     Notes:
         1. Currently, we don't use the content of the videos, titles, and comments except for the initial video search.
-        2. We don't use other signals such as the number of likes, view data, etc. (most of this information is available via YouTube API and can be used in the future).
+        2. We don't use other signals such as the number of likes, view data, etc.
+            (most of this information is available via YouTube API and can be used in the future).
         3. The resulting list is a list of creators that share audiences. Depending on the application, shared audiences might be a desired feature or a problem.
     """
 
@@ -338,7 +330,7 @@ def content_based_search():
         The content-based approach aims to find channels with similar content.
 
     Methodology:
-        To do so, we use NLP to extract relevant keywords from video titles, descriptions, and comments and perform a search for these keywords.
+        We use NLP to extract relevant keywords from video titles, descriptions, and comments, then performs a search for these keywords.
         Next, we build links between YouTube channels that have similar keywords in their videos.
         Channels that share more links are considered more related.
 
