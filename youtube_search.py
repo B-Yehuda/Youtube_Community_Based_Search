@@ -1,4 +1,5 @@
 import contextlib
+import itertools
 import json
 import logging
 import os
@@ -57,19 +58,24 @@ def get_keywords(text, **kwargs) -> pd.DataFrame:
     return df.sort_values("Score (the lower the better)", ascending=True)
 
 
-def distributed_comments_processor(youtube, row):
+def distributed_comments_processor(params):
     """
     Description:
     A function that search comments given single video.
 
     Parameters:
-        1. youtube: YouTube API object constructor
+        1. youtube: YouTube API object
         2. row: video to search comments for
 
     Returns:
         df_video_comments
 
     """
+
+    # extract "youtube" object and "row" (i.e. video) from params
+    youtube = params[0]
+    row = params[1][1]
+
     # initialize next page_token to None (next page to fetch data from)
     next_page = None
     # initialize empty df to store video's comments processed data in it
@@ -107,11 +113,10 @@ def search_videos_and_matching_comments(*,
     """
     Description:
         A function that search videos given channel/query (query=keywords) and match every video it's comments.
-        Return df_videos and df_comments.
-    """
 
-    # initialize empty df to store comments data in it
-    df_comments = pd.DataFrame()
+    Returns:
+             df_videos and df_comments.
+    """
 
     # retrieve channel's/query's videos processed data
     if starting_point.startswith("http"):
@@ -128,10 +133,12 @@ def search_videos_and_matching_comments(*,
                                           )
 
     # retrieve video's comments processed data (distributed process)
-    with ProcessPoolExecutor(max_workers=15) as executor:
+    with ProcessPoolExecutor(max_workers=30) as executor:
         df_comments = pd.DataFrame()
-        for comments in executor.map(distributed_comments_processor, youtube, df_videos.iterrows()):
-            df_comments = pd.concat((df_comments, comments))
+        for comments_per_video in executor.map(distributed_comments_processor,
+                                               zip(itertools.repeat(youtube, len(df_videos)), df_videos.iterrows())
+                                               ):
+            df_comments = pd.concat((df_comments, comments_per_video))
 
     return df_videos, df_comments
 
