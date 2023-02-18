@@ -131,7 +131,7 @@ def search_videos_and_matching_comments(*,
                                           )
 
     # retrieve video's comments processed data (distributed process)
-    with ProcessPoolExecutor(max_workers=30) as executor:
+    with ProcessPoolExecutor(max_workers=10) as executor:
         # initialize empty df comments and of all videos
         df_comments = pd.DataFrame()
         # fetch in a parallel process for each video - its comments
@@ -203,6 +203,7 @@ def community_based_search(*,
     """ Create keywords df from videos data (comments are too noisy). """
 
     print(f"NLP keywords extraction process for channel {starting_point} - started at: \033[1m{datetime.now()}\033[0m")
+
     df_keywords = get_keywords(text='\n'.join(['\n'.join(df_videos.video_title),
                                                '\n'.join(df_videos.video_title),  # yes, twice, to increase the weight
                                                '\n'.join(df_videos.video_description),
@@ -212,6 +213,7 @@ def community_based_search(*,
                                n=5,
                                top=5 * n_keywords,  # why 5? because we want to have some redundancy
                                )
+
     print(f"NLP keywords extraction process for channel {starting_point} - finished at: \033[1m{datetime.now()}\033[0m")
 
     # filter out keywords with 1 word, then save only top n_keywords
@@ -221,8 +223,10 @@ def community_based_search(*,
     # PART 3 - SEARCH MORE VIDEOS WITH SIMILAR KEYWORDS #
     """ Expand the search to the keywords (we rely on YouTube to give us "relevant" videos). """
 
+    print(f"Youtube search process for extracted keywords - started at: \033[1m{datetime.now()}\033[0m")
+
     # retrieve keyword data (distributed process)
-    with ProcessPoolExecutor(max_workers=30) as executor:
+    with ProcessPoolExecutor(max_workers=10) as executor:
         # initialize empty df to store comments and videos of all keywords
         df_more_videos = pd.DataFrame()
         df_more_comments = pd.DataFrame()
@@ -233,6 +237,8 @@ def community_based_search(*,
                                                                    ):
             df_more_videos = pd.concat((df_more_videos, df_keyword_videos))
             df_more_comments = pd.concat((df_more_comments, df_keyword_comments))
+
+    print(f"Youtube search process for extracted keywords - finished at: \033[1m{datetime.now()}\033[0m")
 
     # PART 4 - UNION AND PROCESS RESULTS #
     """ Union channel's videos (and their comments) with keywords' videos (and their comments) and process it. """
@@ -263,6 +269,8 @@ def community_based_search(*,
 
     # PART 5 - COMMUNITY BASED SEARCH #
     """ Find for every channel the most related channels (by shared commenters). """
+
+    print(f"Community based search - started at: \033[1m{datetime.now()}\033[0m")
 
     # build social graph edges (where edge = channel and his commenter (i.e. video_channel_id, comment_author_channel_id))
     df_channel_edges = df_all_comments[['video_channel_id', 'comment_author_channel_id']]
@@ -315,6 +323,8 @@ def community_based_search(*,
 
     # return specified n_recommendations
     df_candidates = df_candidates[['Channel URL (Output)', 'Score']].head(n_recommendations)
+
+    print(f"Community based search - finished at: \033[1m{datetime.now()}\033[0m")
 
     return df_candidates
 
