@@ -18,7 +18,6 @@ from concurrent.futures import ProcessPoolExecutor
 from youtube_project.youtube_scraping_functions import search_comments, process_comments_response, \
     get_videos_from_channel, get_videos_from_query
 
-
 # create logger
 logger = logging.getLogger(__name__)
 FORMAT = "[%(levelname)s|%(filename)s:%(lineno)s:%(funcName)s()] %(message)s"
@@ -69,7 +68,6 @@ def distributed_comments_processor(params):
 
     Returns:
         df_video_comments
-
     """
 
     # extract "youtube" object and "row" (i.e. video) from params
@@ -79,7 +77,7 @@ def distributed_comments_processor(params):
     # initialize next page_token to None (next page to fetch data from)
     next_page = None
     # initialize empty df to store video's comments processed data in it
-    df_video_comments = pd.DataFrame()
+    df_comments_per_video = pd.DataFrame()
     while True:
         # fetch video's comments data
         search_comments_response = search_comments(youtube=youtube,
@@ -93,14 +91,14 @@ def distributed_comments_processor(params):
         next_page, df_result = process_comments_response(search_comments_response=search_comments_response,
                                                          video=row)
         # add video's comments processed data to df
-        df_video_comments = pd.concat((df_video_comments, df_result))
+        df_video_comments = pd.concat((df_comments_per_video, df_result))
         # set condition to follow given n_comments_per_video value
-        if len(df_video_comments) >= 100:
+        if len(df_comments_per_video) >= 100:
             break
         if not next_page:
             break
     # union all videos and their comments processed data
-    return df_video_comments
+    return df_comments_per_video
 
 
 def search_videos_and_matching_comments(*,
@@ -134,13 +132,31 @@ def search_videos_and_matching_comments(*,
 
     # retrieve video's comments processed data (distributed process)
     with ProcessPoolExecutor(max_workers=30) as executor:
+        # initialize empty df comments and of all videos
         df_comments = pd.DataFrame()
-        for comments_per_video in executor.map(distributed_comments_processor,
-                                               zip(itertools.repeat(youtube, len(df_videos)), df_videos.iterrows())
-                                               ):
-            df_comments = pd.concat((df_comments, comments_per_video))
+        # fetch in a parallel process for each video - its comments
+        for df_comments_per_video in executor.map(distributed_comments_processor,
+                                                  zip(itertools.repeat(youtube, len(df_videos)), df_videos.iterrows())
+                                                  ):
+            df_comments = pd.concat((df_comments, df_comments_per_video))
 
     return df_videos, df_comments
+
+
+def distributed_keywords_processor(params):
+    # extract "youtube" object and "keyword" from params
+    youtube = params[0]
+    row = params[1][1]
+
+    # search videos (and their comments) containing the extracted keyword and store them in df
+    df_keyword_videos, df_keyword_comments = search_videos_and_matching_comments(youtube=youtube,
+                                                                                 starting_point=row["Keyword"],
+                                                                                 n_videos_per_request=50,
+                                                                                 n_comments_per_video=50,
+                                                                                 expand_video_information=False
+                                                                                 )
+
+    return df_keyword_videos, df_keyword_comments
 
 
 def community_based_search(*,
@@ -174,8 +190,8 @@ def community_based_search(*,
     """
 
     # PART 1 - SEARCH VIDEOS AND COMMENTS OF GIVEN CHANNEL #
+    """ Search videos and comments of given channel. """
 
-    # search videos and comments of given channel
     df_videos, df_comments = search_videos_and_matching_comments(youtube=youtube,
                                                                  starting_point=starting_point,
                                                                  n_videos_per_request=n_videos_per_request,
@@ -184,8 +200,8 @@ def community_based_search(*,
                                                                  )
 
     # PART 2 - USE NLP TO EXTRACT MAIN KEYWORDS FROM TEXT #
+    """ Create keywords df from videos data (comments are too noisy). """
 
-    # create keywords df from videos data (comments are too noisy)
     print(f"NLP keywords extraction process for channel {starting_point} - started at: \033[1m{datetime.now()}\033[0m")
     df_keywords = get_keywords(text='\n'.join(['\n'.join(df_videos.video_title),
                                                '\n'.join(df_videos.video_title),  # yes, twice, to increase the weight
@@ -203,28 +219,25 @@ def community_based_search(*,
         df_keywords["Keyword"].apply(lambda v: len(v.split()) > 2)].head(n_keywords)  # don't do one-word searches
 
     # PART 3 - SEARCH MORE VIDEOS WITH SIMILAR KEYWORDS #
+    """ Expand the search to the keywords (we rely on YouTube to give us "relevant" videos). """
 
-    # expand the search to the keywords (we rely on YouTube to give us "relevant" videos)
-    df_more_videos = pd.DataFrame()
-    df_more_comments = pd.DataFrame()
-
-    # search videos (and their comments) containing the extracted keyword and store them in df
-    with tqdm(df_keywords["Keyword"]) as pbar:
-        for kw in pbar:
-            curr_v, curr_c = search_videos_and_matching_comments(youtube=youtube,
-                                                                 starting_point=kw,
-                                                                 n_videos_per_request=50,
-                                                                 n_comments_per_video=50,
-                                                                 expand_video_information=False
-                                                                 )
-            df_more_videos = pd.concat((df_more_videos, curr_v))
-            df_more_comments = pd.concat((df_more_comments, curr_c))
-            pbar.set_description(f'{len(df_more_videos):=,} videos, {len(df_more_comments):=,} comments')
-
+    # retrieve keyword data (distributed process)
+    with ProcessPoolExecutor(max_workers=30) as executor:
+        # initialize empty df to store comments and videos of all keywords
+        df_more_videos = pd.DataFrame()
+        df_more_comments = pd.DataFrame()
+        # fetch in a parallel process for each keyword - it's videos and comments
+        for df_keyword_videos, df_keyword_comments in executor.map(distributed_keywords_processor,
+                                                                   zip(itertools.repeat(youtube, len(df_keywords)),
+                                                                       df_keywords.iterrows())
+                                                                   ):
+            df_more_videos = pd.concat((df_more_videos, df_keyword_videos))
+            df_more_comments = pd.concat((df_more_comments, df_keyword_comments))
 
     # PART 4 - UNION AND PROCESS RESULTS #
+    """ Union channel's videos (and their comments) with keywords' videos (and their comments) and process it. """
 
-    # union channel's videos (and their comments) with keywords' videos (and their comments)
+    # union dfs
     df_all_videos = pd.concat((df_videos, df_more_videos))
     df_all_comments = pd.concat((df_comments, df_more_comments)).dropna(
         # remove anonymous comments (drop rows where one of the subset columns contains null)
@@ -249,6 +262,7 @@ def community_based_search(*,
     """
 
     # PART 5 - COMMUNITY BASED SEARCH #
+    """ Find for every channel the most related channels (by shared commenters). """
 
     # build social graph edges (where edge = channel and his commenter (i.e. video_channel_id, comment_author_channel_id))
     df_channel_edges = df_all_comments[['video_channel_id', 'comment_author_channel_id']]
