@@ -12,8 +12,11 @@ from googleapiclient.errors import HttpError
 from tqdm.auto import tqdm
 import yake
 
+from concurrent.futures import ProcessPoolExecutor
+
 from youtube_project.youtube_scraping_functions import search_comments, process_comments_response, \
     get_videos_from_channel, get_videos_from_query
+
 
 # create logger
 logger = logging.getLogger(__name__)
@@ -54,6 +57,46 @@ def get_keywords(text, **kwargs) -> pd.DataFrame:
     return df.sort_values("Score (the lower the better)", ascending=True)
 
 
+def distributed_comments_processor(youtube, row):
+    """
+    Description:
+    A function which search comments given single video.
+
+    Parameters:
+        1. youtube: YouTube API object constructor
+        2. row: video to search comments for
+
+    Returns:
+        df_video_comments
+
+    """
+    # initialize next page_token to None (next page to fetch data from)
+    next_page = None
+    # initialize empty df to store video's comments processed data in it
+    df_video_comments = pd.DataFrame()
+    while True:
+        # fetch video's comments data
+        search_comments_response = search_comments(youtube=youtube,
+                                                   video_id=row["video_id"],
+                                                   page_token=next_page,
+                                                   # verbose_cache=True
+                                                   )
+        if search_comments_response is None:
+            break
+        # process video's comments data
+        next_page, df_result = process_comments_response(search_comments_response=search_comments_response,
+                                                         video=row)
+        # add video's comments processed data to df
+        df_video_comments = pd.concat((df_video_comments, df_result))
+        # set condition to follow given n_comments_per_video value
+        if len(df_video_comments) >= 100:
+            break
+        if not next_page:
+            break
+    # union all videos and their comments processed data
+    return df_video_comments
+
+
 def search_videos_and_matching_comments(*,
                                         youtube,
                                         starting_point: str,
@@ -84,35 +127,11 @@ def search_videos_and_matching_comments(*,
                                           expand_video_information=expand_video_information,
                                           )
 
-    # retrieve video's comments processed data
-    with tqdm(df_videos.iterrows(), desc="Fetching Comments        ", total=len(df_videos)) as pbar:
-        for _, row in pbar:
-            # initialize next page_token to None (next page to fetch data from)
-            next_page = None
-            # initialize empty df to store video's comments processed data in it
-            df_video_comments = pd.DataFrame()
-            while True:
-                # fetch video's comments data
-                search_comments_response = search_comments(youtube=youtube,
-                                                           video_id=row["video_id"],
-                                                           page_token=next_page,
-                                                           # verbose_cache=True
-                                                           )
-                if search_comments_response is None:
-                    break
-                # process video's comments data
-                next_page, df_result = process_comments_response(search_comments_response=search_comments_response,
-                                                                 video=row)
-                # add video's comments processed data to df
-                df_video_comments = pd.concat((df_video_comments, df_result))
-                # set condition to follow given n_comments_per_video value
-                if len(df_video_comments) >= n_comments_per_video:
-                    break
-                if not next_page:
-                    break
-            # union all videos and their comments processed data
-            df_comments = pd.concat((df_comments, df_video_comments))
-            pbar.set_description(f"Fetching Comments (found: {len(df_comments):,})")
+    # retrieve video's comments processed data (distributed process)
+    with ProcessPoolExecutor(max_workers=15) as executor:
+        df_comments = pd.DataFrame()
+        for comments in executor.map(distributed_comments_processor, youtube, df_videos.iterrows()):
+            df_comments = pd.concat((df_comments, comments))
 
     return df_videos, df_comments
 
