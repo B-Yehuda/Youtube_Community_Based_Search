@@ -32,17 +32,17 @@ def get_keywords(text, **kwargs) -> pd.DataFrame:
 
     Background:
         Yake (Yet Another Keyword Extractor) is an unsupervised approach for automatic keyword extraction using text features.
-        Yake defines a set of five features capturing keyword characteristics which are heuristically combined to assign a single score to every keyword.
+        Yake defines a set of five features capturing keyword characteristics that are heuristically combined to assign a single score to every keyword.
         The lower the score, the more significant the keyword will be.
 
     Methods:
-        1. KeywordExtractor - a constructor, which accepts several parameters, the most important of which are:
+        1. KeywordExtractor - a constructor, that accepts several parameters, the most important of which are:
             maxNGrams: Maximum N-grams (number of split words) a keyword should have (Default: 3).
             minNGrams: Minimum N-grams (number of split words) a keyword should have (Default: 1).
             top: Number of words to be retrieved.
             Lan: Default is “en”.
             stopwords: A list of stop words can be passed (the words to be filtered out).
-        2. KeywordExtractor.extract_keywords - a function, which return a list of tuples (keyword: score).
+        2. KeywordExtractor.extract_keywords - a function, that return a list of tuples (keyword: score).
     """
 
     # build a KeywordExtractor object and pass it parameters
@@ -60,7 +60,7 @@ def get_keywords(text, **kwargs) -> pd.DataFrame:
 def distributed_comments_processor(youtube, row):
     """
     Description:
-    A function which search comments given single video.
+    A function that search comments given single video.
 
     Parameters:
         1. youtube: YouTube API object constructor
@@ -106,7 +106,7 @@ def search_videos_and_matching_comments(*,
                                         ) -> (pd.DataFrame, pd.DataFrame):
     """
     Description:
-        A function which search videos given channel/query (query=keywords) and match every video it's comments.
+        A function that search videos given channel/query (query=keywords) and match every video it's comments.
         Return df_videos and df_comments.
     """
 
@@ -147,7 +147,7 @@ def community_based_search(*,
                            ) -> pd.DataFrame:
     """
     Description:
-        A function which searches for a given channel - related channels.
+        A function that searches for a given channel - related channels.
 
     Background:
         By using this function, we assume that channels are related if a YouTube visitor leaves comments on two different channels.
@@ -326,7 +326,7 @@ def recommend(*,
               ):
     """
     Description:
-        A function which uses community_based_search function.
+        A function that uses community_based_search function.
 
     Parameters:
         1. starting_point: The query to search for.
