@@ -72,7 +72,7 @@ def search_videos(youtube,
                   ):
     """
     Description:
-        A function which search video/channel/playlist, in our case we search video, given channel/query (query=keywords) that are passed to channelId/q parameters respectively.
+        A function that search video/channel/playlist, in our case we search video, given channel/query (query=keywords) that are passed to channelId/q parameters respectively.
         Returns a collection of search results that match the query parameters specified in the API request.
         By default, a search result set identifies matching video, channel, and playlist resources, but you can also configure queries to only retrieve a specific type of resource.
 
@@ -116,7 +116,7 @@ def search_videos(youtube,
 def search_comments(youtube, video_id, page_token):
     """
     Description:
-        A function which search for comments given videoId/channelId/allThreadsRelatedToChannelId etc.
+        A function that search for comments given videoId/channelId/allThreadsRelatedToChannelId etc.
         Returns a list of comment threads that match the API request parameters.
     """
 
@@ -152,7 +152,7 @@ def search_comments(youtube, video_id, page_token):
 def get_more_video_info(youtube, video_id: str):
     """
     Description:
-        A function which search videos, in our case we search for extra info given video (e.g. title, description, tags, contentDetails etc.), given id (video_id).
+        A function that search videos, in our case we search for extra info given video (e.g. title, description, tags, contentDetails etc.), given id (video_id).
     """
 
     # fetch dictionary containing extra video info data
@@ -176,7 +176,7 @@ def process_videos_response(youtube,
                             ) -> (str, pd.DataFrame):
     """
     Description:
-        A function which process videos search results to extract/return videos' data (e.g. title, description etc.).
+        A function that process videos search results to extract/return videos' data (e.g. title, description etc.).
     """
 
     # get values of "items" key from dictionary containing videos data
@@ -219,7 +219,7 @@ def process_videos_response(youtube,
 def process_comments_response(search_comments_response, video: pd.Series) -> (str, pd.DataFrame):
     """
     Description:
-        A function which process comments search results to extract/return comments data (e.g. likeCount, textDisplay etc.).
+        A function that processes comments search results to extract/return comments data (e.g. likeCount, textDisplay etc.).
     """
 
     # check if there's another page to fetch data from and return it
@@ -272,7 +272,7 @@ def get_videos_from_channel(youtube,
                             ) -> pd.DataFrame:
     """
     Description:
-        A function which retrieve channel's videos (by applying search_videos function on given channel_id),
+        A function that retrieves channel's videos (by applying search_videos function on given channel_id),
         then processing the data of the retrieved videos (by applying process_videos_response function on given search_videos_response).
     """
 
@@ -319,7 +319,7 @@ def get_videos_from_query(youtube,
                           ) -> pd.DataFrame:
     """
     Description:
-        A function which retrieve query's (query=keywords) videos (by applying search_videos function on given query),
+        A function that retrieves query's (query=keywords) videos (by applying search_videos function on given query),
         then processing the data of the retrieved videos (by applying process_videos_response function on given search_videos_response).
     """
 
