@@ -185,6 +185,7 @@ def community_based_search(*,
 
         # search for videos
         df_videos = get_videos(conf=(youtube, starting_point, n_videos_per_request, True))
+
         # search for each video its comments (in a parallel process)
         df_comments = get_comments_in_parallel_process(executor, youtube, df_videos)
 
@@ -350,7 +351,6 @@ def recommend(*,
     """
     Description:
         A function that uses community_based_search function.
-
     Parameters:
         1. starting_point: The query to search for.
             If it's a URL, we will treat it as a channel address and extract `n_videos_per_request` most recent videos from it
