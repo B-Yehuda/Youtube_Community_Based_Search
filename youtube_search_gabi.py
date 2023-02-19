@@ -1,16 +1,7 @@
-import contextlib
-import itertools
-import json
 import logging
-import os
-from typing import Literal
-
-import googleapiclient.discovery
 import pandas as pd
 from datetime import datetime
-from googleapiclient.errors import HttpError
 
-from tqdm.auto import tqdm
 import yake
 
 from concurrent.futures import ProcessPoolExecutor
@@ -97,63 +88,30 @@ def distributed_comments_processor(params):
     return df_comments_per_video
 
 
-def search_videos_and_matching_comments(*,
-                                        executor,
-                                        youtube,
-                                        starting_point: str,
-                                        n_videos_per_request: int = 10,
-                                        n_comments_per_video: int = 10,
-                                        expand_video_information: bool = True,
-                                        ) -> (pd.DataFrame, pd.DataFrame):
-    """
-    Description:
-        A function that search videos given channel/query (query=keywords) and match every video it's comments.
-    Returns:
-             df_videos and df_comments.
-    """
-
+def get_videos(conf: tuple) -> (pd.DataFrame, pd.DataFrame):
     # retrieve channel's/query's videos processed data
+    youtube = conf[0]
+    starting_point = conf[1]
+    n_videos_per_request = conf[2]
+    expand_video_information = conf[3]
     if starting_point.startswith("http"):
-        df_videos = get_videos_from_channel(youtube=youtube,
-                                            channel_url=starting_point,
-                                            max_results=n_videos_per_request,
-                                            expand_video_information=expand_video_information,
-                                            )
+        return get_videos_from_channel(youtube=youtube,
+                                       channel_url=starting_point,
+                                       max_results=n_videos_per_request,
+                                       expand_video_information=expand_video_information,
+                                       )
     else:
-        df_videos = get_videos_from_query(youtube=youtube,
-                                          query=starting_point,
-                                          max_results=n_videos_per_request,
-                                          expand_video_information=expand_video_information,
-                                          )
-
-    # retrieve video's comments processed data (distributed process)
-    # initialize empty df comments and of all videos
-    df_comments = pd.DataFrame()
-    # fetch in a parallel process for each video - its comments
-    for df_comments_per_video in executor.map(distributed_comments_processor,
-                                              [(youtube, r) for _, r in df_videos.iterrows()]):
-        df_comments = pd.concat((df_comments, df_comments_per_video))
-
-    return df_videos, df_comments
+        return get_videos_from_query(youtube=youtube,
+                                     query=starting_point,
+                                     max_results=n_videos_per_request,
+                                     expand_video_information=expand_video_information,
+                                     )
 
 
-def distributed_keywords_processor(params):
-    # extract "youtube" object and "keyword" from params
-    executor = params[0]
-    youtube = params[1]
-    row = params[2]
-
-    # search videos (and their comments) containing the extracted keyword and store them in df
-    df_keyword_videos, df_keyword_comments = search_videos_and_matching_comments(
-        executor=executor,
-        youtube=youtube,
-        starting_point=row["Keyword"],
-        n_videos_per_request=50,
-        n_comments_per_video=50,
-        expand_video_information=False
-    )
-
-    return df_keyword_videos, df_keyword_comments
+def get_comments(executor, youtube, videos: pd.DataFrame) -> pd.DataFrame:
+    df_comments = list(executor.map(distributed_comments_processor,
+                                    [(youtube, r) for _, r in videos.iterrows()]))
+    return pd.concat(df_comments)
 
 
 def community_based_search(*,
@@ -187,14 +145,9 @@ def community_based_search(*,
     """ Search videos and comments of given channel. """
 
     with ProcessPoolExecutor(max_workers=20) as executor:
-        df_videos, df_comments = search_videos_and_matching_comments(
-            executor=executor,
-            youtube=youtube,
-            starting_point=starting_point,
-            n_videos_per_request=n_videos_per_request,
-            n_comments_per_video=n_comments_per_video,
-            expand_video_information=True,
-        )
+        df_videos = get_videos(conf=(youtube, starting_point, n_videos_per_request, True))
+        # fetch in a parallel process for each video - its comments
+        df_comments = get_comments(executor, youtube, df_videos)
 
         # PART 2 - USE NLP TO EXTRACT MAIN KEYWORDS FROM TEXT #
         """ Create keywords df from videos data (comments are too noisy). """
@@ -225,17 +178,11 @@ def community_based_search(*,
 
         print(f"Youtube search process for extracted keywords - started at: \033[1m{datetime.now()}\033[0m")
 
-        # retrieve keyword data (distributed process)
-        # initialize empty df to store comments and videos of all keywords
-        df_more_videos = pd.DataFrame()
-        df_more_comments = pd.DataFrame()
-        # fetch in a parallel process for each keyword - it's videos and comments
+        df_more_videos = pd.concat(list(executor.map(get_videos,
+                                                     [(youtube, r["Keyword"], n_videos_per_request, False) for _, r in
+                                                      df_keywords.iterrows()])))
 
-        for df_keyword_videos, df_keyword_comments in executor.map(distributed_keywords_processor,
-                                                                   [(executor, youtube, r) for _, r in
-                                                                    df_keywords.iterrows()]):
-            df_more_videos = pd.concat((df_more_videos, df_keyword_videos))
-            df_more_comments = pd.concat((df_more_comments, df_keyword_comments))
+        df_more_comments = get_comments(executor, youtube, df_more_videos)
 
         print(f"Youtube search process for extracted keywords - finished at: \033[1m{datetime.now()}\033[0m")
 
