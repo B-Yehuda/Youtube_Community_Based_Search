@@ -173,6 +173,16 @@ def community_based_search(*,
         4. Record which users left comments on each video and build connections between the channels.
         5. Aggregate the links (connections) and find the most related channels.
 
+    Parameters:
+        1. youtube: YouTube API object
+        2. starting_point: The query to search for.
+            If it's a URL, we will treat it as a channel address and extract `n_videos_per_request` most recent videos from it
+            If it's a string, we will perform a search and extract `n_videos_per_request` most relevant videos
+        3. n_recommendations: The number of recommendations to return
+        4. n_videos_per_request: How many videos to fetch per request
+        5. n_comments_per_video: How many comments to fetch per video
+        6. n_keywords: Number of keywords to extract for every channel using NLP model
+
     Notes:
         1. Currently, we don't use the content of the videos, titles, and comments except for the initial video search.
         2. We don't use other signals such as the number of likes, view data, etc. (most of this information is available via YouTube API and can be used in the future).
@@ -339,32 +349,3 @@ def content_based_search():
         NOT IMPLEMENTED YET
     """
     pass
-
-
-def recommend(*,
-              youtube,
-              starting_point: str,
-              n_recommendations: int = 20,
-              n_videos_per_request: int = 50,
-              n_comments_per_video: int = 100,
-              ):
-    """
-    Description:
-        A function that uses community_based_search function.
-    Parameters:
-        1. starting_point: The query to search for.
-            If it's a URL, we will treat it as a channel address and extract `n_videos_per_request` most recent videos from it
-            If it's a string, we will perform a search and extract `n_videos_per_request` most relevant videos
-        2. n_recommendations: The number of recommendations to return
-        3. n_videos_per_request: How many videos to fetch per request
-        4. n_comments_per_video: How many comments to fetch per video
-    """
-
-    df_recommendations = community_based_search(youtube=youtube,
-                                                starting_point=starting_point,
-                                                n_recommendations=n_recommendations,
-                                                n_videos_per_request=n_videos_per_request,
-                                                n_comments_per_video=n_comments_per_video,
-                                                )
-
-    return df_recommendations
