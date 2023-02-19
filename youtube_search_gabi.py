@@ -20,10 +20,12 @@ def get_keywords(text, **kwargs) -> pd.DataFrame:
     """
     Description:
         A function that uses NLP to extract keywords/key phrases from a single text.
+
     Background:
         Yake (Yet Another Keyword Extractor) is an unsupervised approach for automatic keyword extraction using text features.
         Yake defines a set of five features capturing keyword characteristics that are heuristically combined to assign a single score to every keyword.
         The lower the score, the more significant the keyword will be.
+
     Methods:
         1. KeywordExtractor - a constructor, that accepts several parameters, the most important of which are:
             maxNGrams: Maximum N-grams (number of split words) a keyword should have (Default: 3).
@@ -46,13 +48,15 @@ def get_keywords(text, **kwargs) -> pd.DataFrame:
     return df.sort_values("Score (the lower the better)", ascending=True)
 
 
-def distributed_comments_processor(params):
+def get_comments(params):
     """
     Description:
     A function that search comments given single video.
+
     Parameters:
         1. youtube: YouTube API object
         2. row: video to search comments for
+
     Returns:
         df_video_comments
     """
@@ -89,11 +93,27 @@ def distributed_comments_processor(params):
 
 
 def get_videos(conf: tuple) -> (pd.DataFrame, pd.DataFrame):
-    # retrieve channel's/query's videos processed data
+    """
+    Description:
+    A function that retrieve Channel's/Query's videos processed data.
+
+    Parameters:
+        1. youtube: YouTube API object
+        2. starting_point: Channel/Query to search videos for
+        3. n_videos_per_request: How many videos to fetch per request
+        4. expand_video_information: Whether to search for extra information for the videos
+
+    Returns:
+        df_videos
+    """
+
+    # extract parameters from given conf (tuple)
     youtube = conf[0]
     starting_point = conf[1]
     n_videos_per_request = conf[2]
     expand_video_information = conf[3]
+
+    # retrieve channel's/query's videos processed data
     if starting_point.startswith("http"):
         return get_videos_from_channel(youtube=youtube,
                                        channel_url=starting_point,
@@ -108,9 +128,24 @@ def get_videos(conf: tuple) -> (pd.DataFrame, pd.DataFrame):
                                      )
 
 
-def get_comments(executor, youtube, videos: pd.DataFrame) -> pd.DataFrame:
-    df_comments = list(executor.map(distributed_comments_processor,
-                                    [(youtube, r) for _, r in videos.iterrows()]))
+def get_comments_in_parallel_process(executor, youtube, videos: pd.DataFrame) -> pd.DataFrame:
+    """
+    Description:
+    A function that retrieve video's comments processed data in a parallel process.
+
+    Parameters:
+        1. executor: ProcessPoolExecutor object that allows parallelism of code (via multiprocessing)
+        2. youtube: YouTube API object
+        3. videos: Dataframe of videos
+
+    Returns:
+        df_comments
+    """
+
+    # search for each video its comments (in a parallel process)
+    df_comments = list(executor.map(get_comments,
+                                    [(youtube, row) for _, row in videos.iterrows()]))
+
     return pd.concat(df_comments)
 
 
@@ -126,35 +161,40 @@ def community_based_search(*,
     """
     Description:
         A function that searches for a given channel - related channels.
+
     Background:
         By using this function, we assume that channels are related if a YouTube visitor leaves comments on two different channels.
         Channels that share many visitors are more likely to be related.
+
     Methodology:
         1. Start with a seed channel (anchor_channel_id) and extract its recent videos to find related channels.
         2. Look at the video titles, descriptions, and comments and identify relevant keywords using an NLP model.
         3. Use these keywords to search for related videos on YouTube.
         4. Record which users left comments on each video and build connections between the channels.
         5. Aggregate the links (connections) and find the most related channels.
+
     Notes:
         1. Currently, we don't use the content of the videos, titles, and comments except for the initial video search.
         2. We don't use other signals such as the number of likes, view data, etc. (most of this information is available via YouTube API and can be used in the future).
         3. The resulting list is a list of creators that share audiences. Depending on the application, shared audiences might be a desired feature or a problem.
     """
 
-    # PART 1 - SEARCH VIDEOS AND COMMENTS OF GIVEN CHANNEL #
-    """ Search videos and comments of given channel. """
-
     with ProcessPoolExecutor(max_workers=20) as executor:
+        # PART 1 - SEARCH VIDEOS AND COMMENTS OF GIVEN CHANNEL #
+        """ Search videos and comments for a given channel requested by the user (i.e. csv input). """
+
+        # search for videos
         df_videos = get_videos(conf=(youtube, starting_point, n_videos_per_request, True))
-        # fetch in a parallel process for each video - its comments
-        df_comments = get_comments(executor, youtube, df_videos)
+        # search for each video its comments (in a parallel process)
+        df_comments = get_comments_in_parallel_process(executor, youtube, df_videos)
 
         # PART 2 - USE NLP TO EXTRACT MAIN KEYWORDS FROM TEXT #
-        """ Create keywords df from videos data (comments are too noisy). """
+        """ Create keywords df from videos text data (comments are too noisy). """
 
         print(
             f"NLP keywords extraction process for channel {starting_point} - started at: \033[1m{datetime.now()}\033[0m")
 
+        # extract keywords and scores from videos text data
         df_keywords = get_keywords(text='\n'.join(['\n'.join(df_videos.video_title),
                                                    '\n'.join(df_videos.video_title),
                                                    # yes, twice, to increase the weight
@@ -178,11 +218,17 @@ def community_based_search(*,
 
         print(f"Youtube search process for extracted keywords - started at: \033[1m{datetime.now()}\033[0m")
 
+        # search for each keyword its videos (in a parallel process)
         df_more_videos = pd.concat(list(executor.map(get_videos,
-                                                     [(youtube, r["Keyword"], n_videos_per_request, False) for _, r in
-                                                      df_keywords.iterrows()])))
+                                                     [(youtube, row["Keyword"], n_videos_per_request, False)
+                                                      for _, row in df_keywords.iterrows()
+                                                      ]
+                                                     )
+                                        )
+                                   )
 
-        df_more_comments = get_comments(executor, youtube, df_more_videos)
+        # search for each video its comments (in a parallel process)
+        df_more_comments = get_comments_in_parallel_process(executor, youtube, df_more_videos)
 
         print(f"Youtube search process for extracted keywords - finished at: \033[1m{datetime.now()}\033[0m")
 
@@ -199,8 +245,8 @@ def community_based_search(*,
         # get channel id and video id from df_all_videos
         channel_from_video = (
             df_all_videos[["video_channelId", "video_id"]]
-                .drop_duplicates()
-                .set_index("video_id")["video_channelId"]
+            .drop_duplicates()
+            .set_index("video_id")["video_channelId"]
         )
 
         # add to df_all_comments channel id column
@@ -208,9 +254,9 @@ def community_based_search(*,
         """
         Process: 
             By reindexing channel_from_video df based on df_all_comments.
-            Since df_all_comments contains multiple rows for the same video_id,
-            by reindexing channel_from_video with df_all_comments["video_id"].values -
-            we get multiple video_channel_id (channel_from_video.values) for every row matching df_all_comments.
+            Since df_all_comments contains multiple rows for the same video_id, 
+             by reindexing channel_from_video with df_all_comments["video_id"].values - 
+             we get multiple video_channel_id (channel_from_video.values) for every row matching df_all_comments.
         """
 
         # PART 5 - COMMUNITY BASED SEARCH #
@@ -279,12 +325,15 @@ def content_based_search():
     """
     Description:
         Use the content-based search to discover creators that create similar content but do not necessarily share audiences.
+
     Background:
         The content-based approach aims to find channels with similar content.
+
     Methodology:
         To do so, we use NLP to extract relevant keywords from video titles, descriptions, and comments and perform a search for these keywords.
         Next, we build links between YouTube channels that have similar keywords in their videos.
         Channels that share more links are considered more related.
+
     Notes:
         NOT IMPLEMENTED YET
     """
@@ -301,6 +350,7 @@ def recommend(*,
     """
     Description:
         A function that uses community_based_search function.
+
     Parameters:
         1. starting_point: The query to search for.
             If it's a URL, we will treat it as a channel address and extract `n_videos_per_request` most recent videos from it
