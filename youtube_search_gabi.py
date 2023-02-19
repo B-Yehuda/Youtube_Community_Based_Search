@@ -16,7 +16,7 @@ logging.basicConfig(format=FORMAT)
 logger.setLevel(logging.INFO)
 
 
-def get_keywords(text, **kwargs) -> pd.DataFrame:
+def get_keywords(conf: tuple) -> pd.DataFrame:
     """
     Description:
         A function that uses NLP to extract keywords/key phrases from a single text.
@@ -36,8 +36,14 @@ def get_keywords(text, **kwargs) -> pd.DataFrame:
         2. KeywordExtractor.extract_keywords - a function, that return a list of tuples (keyword: score).
     """
 
+    # extract parameters from given conf (tuple)
+    text = conf[0]
+    n = conf[1]
+    top = conf[2]
+    channel = conf[3]
+
     # build a KeywordExtractor object and pass it parameters
-    kw_extractor = yake.KeywordExtractor(**kwargs)
+    kw_extractor = yake.KeywordExtractor(n, top)
 
     # create a list of tuples (keyword: score) by passing the text to the extract_keywords function
     keywords = kw_extractor.extract_keywords(text)
@@ -151,7 +157,7 @@ def get_comments_in_parallel_process(executor, youtube, videos: pd.DataFrame) ->
 
 def community_based_search(*,
                            youtube,
-                           starting_point: str,
+                           df_starting_point: str,
                            n_recommendations: int = 10,
                            n_videos_per_request: int = 50,
                            n_comments_per_video: int = 100,
@@ -176,8 +182,8 @@ def community_based_search(*,
     Parameters:
         1. youtube: YouTube API object
         2. starting_point: The query to search for.
-            If it's a URL, we will treat it as a channel address and extract `n_videos_per_request` most recent videos from it
-            If it's a string, we will perform a search and extract `n_videos_per_request` most relevant videos
+            If it's a URL, we will treat it as a channel address and extract `n_videos_per_request` most recent videos from it (i.e. PART 1)
+            If it's a string, we will perform a search and extract `n_videos_per_request` most relevant videos (i.e. PART 3)
         3. n_recommendations: The number of recommendations to return
         4. n_videos_per_request: How many videos to fetch per request
         5. n_comments_per_video: How many comments to fetch per video
@@ -193,32 +199,48 @@ def community_based_search(*,
         # PART 1 - SEARCH VIDEOS AND COMMENTS OF GIVEN CHANNEL #
         """ Search videos and comments for a given channel requested by the user (i.e. csv input). """
 
-        # search for videos
-        df_videos = get_videos(conf=(youtube, starting_point, n_videos_per_request, True))
+        # search videos for all channels (in a parallel process)
+        df_videos_of_all_channels = pd.concat(list(executor.map(get_videos,
+                                                                [(youtube, row["URL"], n_videos_per_request, True)
+                                                                 for _, row in df_starting_point.iterrows()
+                                                                 ]
+                                                                )
+                                                   )
+                                              )
 
         # search for each video its comments (in a parallel process)
-        df_comments = get_comments_in_parallel_process(executor, youtube, df_videos)
+        df_comments = get_comments_in_parallel_process(executor, youtube, df_videos_of_all_channels)
 
         # PART 2 - USE NLP TO EXTRACT MAIN KEYWORDS FROM TEXT #
         """ Create keywords df from videos text data (comments are too noisy). """
 
         print(
-            f"NLP keywords extraction process for channel {starting_point} - started at: \033[1m{datetime.now()}\033[0m")
+            f"NLP keywords extraction process for all channels - started at: \033[1m{datetime.now()}\033[0m")
+
+        df_videos_of_all_channels_dict = {channel: df_videos_of_all_channels[df_videos_of_all_channels["video_channelId"] == channel] for channel in df_videos_of_all_channels["video_channelId"].unique()}
 
         # extract keywords and scores from videos text data
-        df_keywords = get_keywords(text='\n'.join(['\n'.join(df_videos.video_title),
-                                                   '\n'.join(df_videos.video_title),
-                                                   # yes, twice, to increase the weight
-                                                   '\n'.join(df_videos.video_description),
-                                                   # '\n'.join(df_comments.comment_text)  # comments seem to be too noisy
+        df_keywords = pd.concat(list(executor.map(get_keywords,
+                                                  [('\n'.join(['\n'.join(df_videos_of_single_channels["video_title"]),
+                                                               '\n'.join(df_videos_of_single_channels["video_title"]),
+                                                               # yes, twice, to increase the weight
+                                                               '\n'.join(
+                                                                   df_videos_of_single_channels["video_description"]),
+                                                               # '\n'.join(df_comments["comment_text"])  # comments seem to be too noisy
+                                                               ]
+                                                              ),
+                                                    5,
+                                                    5 * n_keywords,  # why 5? because we want to have some redundancy
+                                                    df_videos_of_single_channels["video_channelId"]
+                                                    )
+                                                   for df_videos_of_single_channels in df_videos_of_all_channels_dict.values()
                                                    ]
-                                                  ),
-                                   n=5,
-                                   top=5 * n_keywords,  # why 5? because we want to have some redundancy
-                                   )
+                                                  )
+                                     )
+                                )
 
         print(
-            f"NLP keywords extraction process for channel {starting_point} - finished at: \033[1m{datetime.now()}\033[0m")
+            f"NLP keywords extraction process for all channels - finished at: \033[1m{datetime.now()}\033[0m")
 
         # filter out keywords with 1 word, then save only top n_keywords
         df_keywords = df_keywords.loc[
