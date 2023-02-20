@@ -346,41 +346,45 @@ def community_based_search(*,
         # for example: [X, Y, 14], [Y, X, 14], [X, Y, 8], [Y, X, 8]
         # TODO: Consider changing FROM score=row["n_x"]+row["n_y"] TO score=row["n_x"]*row["n_y"]
         edge_counts = df_fof.apply(lambda row: (frozenset((row["video_channel_id_x"], row["video_channel_id_y"])),
-                                                row["n_x"] + row["n_y"]
+                                                row["n_x"] + row["n_y"],
+                                                row["anchor_channel_id"]
                                                 ),
                                    axis='columns'
                                    )
 
         # transform the extraction to list
-        edge_counts = [(s, n) for (s, n) in edge_counts]
+        edge_counts = [(connection, score, anchor_channel_id) for (connection, score, anchor_channel_id) in edge_counts]
 
         # transform the extraction to df
-        df_edge_counts = pd.DataFrame(edge_counts, columns=['Connection', 'Score'])
+        df_edge_counts = pd.DataFrame(edge_counts, columns=['Connection', 'Score', 'anchor_channel_id'])
 
         # sum the score (= total number of interactions based on commenters) between 2 channels
         # (yes, with this type of calculation - the score is multiplied by 2 since the OUTER JOIN, but it doesn't mean anything... it's for all channels...)
-        df_edge_counts = df_edge_counts.groupby('Connection')['Score'].agg(sum).reset_index()
+        df_edge_counts = df_edge_counts.groupby(['Connection', 'anchor_channel_id'])['Score'].agg(sum).reset_index()
 
         # aggregation and sorting
-        # extract only rows (Connection) which contains the main given channel (anchor_channel_id)
-        df_candidates = df_edge_counts.loc[df_edge_counts["Connection"].apply(lambda c: anchor_channel_id in c)].copy()
+        # extract only rows where "Connection" column contains the main anchor_channel_id
+        df_edge_counts["Connection_set"] = set(df_edge_counts["Connection"])
+        df_edge_counts["anchor_channel_id_set"] = set(df_edge_counts["anchor_channel_id"])
+        df_edge_counts["intersection"] = [len(set(Connection).intersection(set(anchor_channel_id)))
+                                          for Connection, anchor_channel_id in
+                                          zip(df_edge_counts["Connection"], df_edge_counts["anchor_channel_id"])
+                                          ]
+
+        df_candidates = df_edge_counts.loc[df_edge_counts["intersection"] > 0].copy()
 
         # add candidate channel (= related channel to anchor_channel_id) (by popping out from every row - the anchor_channel_id)
         df_candidates['candidate'] = df_candidates["Connection"].apply(
-            lambda s: set(s.difference({anchor_channel_id})).pop())
+            lambda s: set(s.difference({df_candidates["anchor_channel_id"]})).pop())
 
         # sort values by score (~= total number of interactions based on commenters)
-        df_candidates = df_candidates.sort_values('Score',
-                                                  ascending=False).reset_index(
-            drop=True)
+        df_candidates = df_candidates.sort_values('Score', ascending=False).reset_index(drop=True)
 
         # alter candidate channel string to url
-        df_candidates['Channel URL (Output)'] = 'https://www.youtube.com/channel/' + \
-                                                df_candidates['candidate']
+        df_candidates['Channel URL (Output)'] = 'https://www.youtube.com/channel/' + df_candidates['candidate']
 
         # add anchor_channel_id column
-        df_candidates[
-            "Channel URL (Input)"] = f"https://www.youtube.com/channel/{anchor_channel_id}"
+        df_candidates["Channel URL (Input)"] = 'https://www.youtube.com/channel/' + df_candidates["anchor_channel_id"]
 
         # return specified n_recommendations
         df_candidates = df_candidates[
