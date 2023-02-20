@@ -48,15 +48,16 @@ def get_keywords(conf: tuple) -> pd.DataFrame:
                                          )
 
     # create a list of tuples (keyword: score) by passing the text to the extract_keywords function
-    keywords = kw_extractor.extract_keywords(text)
+    keywords = kw_extractor.extract_keywords(text=text)
 
     # create a data frame from the keywords and scores
     df = pd.DataFrame(keywords, columns=["Keyword", "Score (the lower the better)"])
     df["anchor_channel_id"] = anchor_channel_id
 
-    # filter out keywords with 1 word, then save only top n_keywords
+    # filter out keywords with 1 word
     df = df.loc[df["Keyword"].apply(lambda v: len(v.split()) > 2)]  # don't do one-word searches
 
+    # return only top n_keywords
     return df.sort_values("Score (the lower the better)", ascending=True).head(top)
 
 
@@ -192,7 +193,7 @@ def community_based_search(*,
                            n_recommendations: int = 10,
                            n_videos_per_request: int = 50,
                            n_comments_per_video: int = 100,
-                           keyword_target_length=5,  # to be used with yake
+                           keyword_target_length: int = 5,  # to be used with yake
                            n_keywords=10,
                            ) -> pd.DataFrame:
     """
@@ -231,17 +232,17 @@ def community_based_search(*,
         """ Search videos and comments for given channels (anchor_channel_id) requested by the user (i.e. csv input). """
 
         # search videos for all channels (in a parallel process)
-        df_videos_dict = dict(list(executor.map(get_videos,
-                                                [(youtube, row["URL"], row["URL"], n_videos_per_request, True)
-                                                 for _, row in df_starting_point.iterrows()
-                                                 ]
-                                                )
-                                   )
-                              )
-        df_videos = pd.concat(df_videos_dict.values())
+        channels_videos_dict = dict(list(executor.map(get_videos,
+                                                      [(youtube, row["URL"], row["URL"], n_videos_per_request, True)
+                                                       for _, row in df_starting_point.iterrows()
+                                                       ]
+                                                      )
+                                         )
+                                    )
+        df_channels_videos = pd.concat(channels_videos_dict.values())
 
         # search for each video its comments (in a parallel process)
-        df_comments = get_comments_in_parallel_process(executor, youtube, df_videos)
+        df_channels_comments = get_comments_in_parallel_process(executor, youtube, df_channels_videos)
 
         # PART 2 - USE NLP TO EXTRACT MAIN KEYWORDS FROM TEXT #
         """ Create keywords df from videos text data (comments are too noisy). """
@@ -251,15 +252,14 @@ def community_based_search(*,
 
         # extract keywords and scores from videos text data
         df_top_keywords = pd.concat(list(executor.map(get_keywords,
-                                                      [(
-                                                          process_text_for_nlp(df=df_videos_of_single_channel),
-                                                          5,
-                                                          n_keywords,
-                                                          anchor_channel_id
-                                                      )
-                                                          for anchor_channel_id, df_videos_of_single_channel in
-                                                          df_videos_dict.items()
-                                                      ]
+                                                      [(process_text_for_nlp(df=df_videos_of_single_channel),
+                                                        keyword_target_length,
+                                                        n_keywords,
+                                                        anchor_channel_id
+                                                        )
+                                                       for anchor_channel_id, df_videos_of_single_channel in
+                                                       channels_videos_dict.items()
+                                                       ]
                                                       )
                                          )
                                     )
@@ -273,21 +273,21 @@ def community_based_search(*,
         print(f"Youtube search process for extracted keywords - started at: \033[1m{datetime.now()}\033[0m")
 
         # search for each keyword its videos (in a parallel process)
-        df_more_videos = pd.concat([videos for _, videos in
-                                    executor.map(get_videos,
-                                                 [(youtube, row["Keyword"],
-                                                   row["anchor_channel_id"],
-                                                   n_videos_per_request,
-                                                   False
-                                                   )
-                                                  for _, row in df_top_keywords.iterrows()
-                                                  ]
-                                                 )
-                                    ]
-                                   )
+        df_keywords_videos = pd.concat([videos for _, videos in executor.map(get_videos,
+                                                                             [(youtube,
+                                                                               row["Keyword"],
+                                                                               row["anchor_channel_id"],
+                                                                               n_videos_per_request,
+                                                                               False
+                                                                               )
+                                                                              for _, row in df_top_keywords.iterrows()
+                                                                              ]
+                                                                             )
+                                        ]
+                                       )
 
         # search for each video its comments (in a parallel process)
-        df_more_comments = get_comments_in_parallel_process(executor, youtube, df_more_videos)
+        df_keywords_comments = get_comments_in_parallel_process(executor, youtube, df_keywords_videos)
 
         print(f"Youtube search process for extracted keywords - finished at: \033[1m{datetime.now()}\033[0m")
 
@@ -295,8 +295,8 @@ def community_based_search(*,
         """ Union channel's videos (and their comments) with keywords' videos (and their comments). """
 
         # union dfs
-        df_all_videos = pd.concat((df_videos, df_more_videos))
-        df_all_comments = pd.concat((df_comments, df_more_comments)).dropna(
+        df_all_videos = pd.concat((df_channels_videos, df_keywords_videos))
+        df_all_comments = pd.concat((df_channels_comments, df_keywords_comments)).dropna(
             # remove anonymous comments (drop rows where one of the subset columns contains null)
             subset=["comment_author_channel_id", "comment_author_channel_url"]
         )
@@ -321,11 +321,11 @@ def community_based_search(*,
         # PART 5 - COMMUNITY BASED SEARCH #
         """ Find for every channel the most related channels (by shared commenters). """
 
-        # initialize empty df to store candidates data (candidates = related channels to given channel)
+        # initialize empty df to store candidates data (candidates = channels related to given channel)
         df_candidates = pd.DataFrame()
 
         # anchor the main given channel (the one for which we want to look for similar channels)
-        for anchor_channel_id in df_videos_dict.keys():
+        for anchor_channel_id in channels_videos_dict.keys():
             print(
                 f"Community based search for channel {anchor_channel_id} - started at: \033[1m{datetime.now()}\033[0m")
 
