@@ -13,7 +13,7 @@ from flask import Flask, make_response, request, render_template, Response
 from prediction_projects.model_utilities import connect_redshift, load_features_from_redshift
 from prediction_projects.predict import create_predictions_df
 
-from youtube_project.youtube_search import recommend
+from youtube_project.youtube_search import community_based_search
 from youtube_project.youtube_scraping_functions import build_youtube
 
 import vault
@@ -304,17 +304,17 @@ def youtube_search():
     youtube = build_youtube(api_key=api_key)
 
     # iterate over channels url input and retrieve recommendations (relative channels)
-    for channel_url in df_input["URL"]:
-        print(f"Youtube search process for channel {channel_url} - started at: \033[1m{datetime.now()}\033[0m")
-        df_recommend = recommend(youtube=youtube,
-                                 starting_point=channel_url,
-                                 n_recommendations=int(youtube_config["Data_Processing"]["n_recommendations"]),
-                                 n_videos_per_request=int(youtube_config["Data_Processing"]["n_videos_per_request"]),
-                                 n_comments_per_video=int(youtube_config["Data_Processing"]["n_comments_per_video"])
-                                 )
-        df_recommend["Channel URL (Input)"] = channel_url
-        df_result = pd.concat((df_result, df_recommend))
-        print(f"Youtube search process for channel {channel_url} - finished at: \033[1m{datetime.now()}\033[0m")
+
+    print(f"Youtube search process for all channels - started at: \033[1m{datetime.now()}\033[0m")
+    df_result = community_based_search(
+        youtube=youtube,
+        df_starting_point=df_input,
+        n_recommendations=int(youtube_config["Data_Processing"]["n_recommendations"]),
+        n_videos_per_request=int(youtube_config["Data_Processing"]["n_videos_per_request"]),
+        n_comments_per_video=int(youtube_config["Data_Processing"]["n_comments_per_video"])
+    )
+
+    print(f"Youtube search process for all channels - finished at: \033[1m{datetime.now()}\033[0m")
 
     # prepare df to redshift (extract provider_id from given url --> so we can join bi_db.creators.provider_id)
     df_result["provider_id"] = df_result["Channel URL (Output)"].str.split('/').str[-1]
