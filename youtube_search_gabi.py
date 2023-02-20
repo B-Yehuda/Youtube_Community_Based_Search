@@ -40,16 +40,17 @@ def get_keywords(conf: tuple) -> pd.DataFrame:
     text = conf[0]
     n = conf[1]
     top = conf[2]
-    channel = conf[3]
+    anchor_channel_id = conf[3]
 
     # build a KeywordExtractor object and pass it parameters
-    kw_extractor = yake.KeywordExtractor(n, top)
+    kw_extractor = yake.KeywordExtractor(n=n, top=top)
 
     # create a list of tuples (keyword: score) by passing the text to the extract_keywords function
     keywords = kw_extractor.extract_keywords(text)
 
     # create a data frame from the keywords and scores
     df = pd.DataFrame(keywords, columns=["Keyword", "Score (the lower the better)"])
+    df["anchor_channel_id"] = anchor_channel_id
 
     return df.sort_values("Score (the lower the better)", ascending=True)
 
@@ -94,7 +95,13 @@ def get_comments(params):
             break
         if not next_page:
             break
-    # union all videos and their comments processed data
+
+    # retrieve anchor_channel_id
+    anchor_channel_id = row["anchor_channel_id"]
+
+    # add to each row the anchor_channel_id
+    df_comments_per_video["anchor_channel_id"] = anchor_channel_id
+
     return df_comments_per_video
 
 
@@ -116,22 +123,31 @@ def get_videos(conf: tuple) -> (pd.DataFrame, pd.DataFrame):
     # extract parameters from given conf (tuple)
     youtube = conf[0]
     starting_point = conf[1]
-    n_videos_per_request = conf[2]
-    expand_video_information = conf[3]
+    anchor_channel_id = conf[2]
+    n_videos_per_request = conf[3]
+    expand_video_information = conf[4]
 
     # retrieve channel's/query's videos processed data
     if starting_point.startswith("http"):
-        return get_videos_from_channel(youtube=youtube,
+        df_videos = get_videos_from_channel(youtube=youtube,
                                        channel_url=starting_point,
                                        max_results=n_videos_per_request,
                                        expand_video_information=expand_video_information,
                                        )
+        # add to each video the anchor_channel_id
+        anchor_channel_id = anchor_channel_id.split("/")[-1]
+        df_videos["anchor_channel_id"] = anchor_channel_id
+
     else:
-        return get_videos_from_query(youtube=youtube,
+        df_videos = get_videos_from_query(youtube=youtube,
                                      query=starting_point,
                                      max_results=n_videos_per_request,
                                      expand_video_information=expand_video_information,
                                      )
+        # add to each video the anchor_channel_id
+        df_videos["anchor_channel_id"] = anchor_channel_id
+
+    return df_videos
 
 
 def get_comments_in_parallel_process(executor, youtube, videos: pd.DataFrame) -> pd.DataFrame:
@@ -153,6 +169,16 @@ def get_comments_in_parallel_process(executor, youtube, videos: pd.DataFrame) ->
                                     [(youtube, row) for _, row in videos.iterrows()]))
 
     return pd.concat(df_comments)
+
+
+def process_text_for_nlp(df):
+    text = '\n'.join(['\n'.join(df["video_title"]),
+                      '\n'.join(df["video_title"]),
+                      # yes, twice, to increase the weight
+                      '\n'.join(df["video_description"]),
+                      # '\n'.join(df_comments["comment_text"])  # comments seem to be too noisy
+                      ])
+    return text
 
 
 def community_based_search(*,
@@ -197,19 +223,19 @@ def community_based_search(*,
 
     with ProcessPoolExecutor(max_workers=20) as executor:
         # PART 1 - SEARCH VIDEOS AND COMMENTS OF GIVEN CHANNEL #
-        """ Search videos and comments for a given channel requested by the user (i.e. csv input). """
+        """ Search videos and comments for given channels (anchor_channel_id) requested by the user (i.e. csv input). """
 
         # search videos for all channels (in a parallel process)
-        df_videos_of_all_channels = pd.concat(list(executor.map(get_videos,
-                                                                [(youtube, row["URL"], n_videos_per_request, True)
-                                                                 for _, row in df_starting_point.iterrows()
-                                                                 ]
-                                                                )
-                                                   )
-                                              )
+        df_videos = pd.concat(list(executor.map(get_videos,
+                                                [(youtube, row["URL"], row["URL"], n_videos_per_request, True)
+                                                 for _, row in df_starting_point.iterrows()
+                                                 ]
+                                                )
+                                   )
+                              )
 
         # search for each video its comments (in a parallel process)
-        df_comments = get_comments_in_parallel_process(executor, youtube, df_videos_of_all_channels)
+        df_comments = get_comments_in_parallel_process(executor, youtube, df_videos)
 
         # PART 2 - USE NLP TO EXTRACT MAIN KEYWORDS FROM TEXT #
         """ Create keywords df from videos text data (comments are too noisy). """
@@ -217,24 +243,22 @@ def community_based_search(*,
         print(
             f"NLP keywords extraction process for all channels - started at: \033[1m{datetime.now()}\033[0m")
 
-        df_videos_of_all_channels_dict = {channel: df_videos_of_all_channels[df_videos_of_all_channels["video_channelId"] == channel] for channel in df_videos_of_all_channels["video_channelId"].unique()}
+        df_videos_dict = {
+            anchor_channel_id: df_videos[df_videos["video_channelId"] == anchor_channel_id]
+            for anchor_channel_id in df_videos["video_channelId"].unique()
+        }
 
         # extract keywords and scores from videos text data
         df_keywords = pd.concat(list(executor.map(get_keywords,
-                                                  [('\n'.join(['\n'.join(df_videos_of_single_channels["video_title"]),
-                                                               '\n'.join(df_videos_of_single_channels["video_title"]),
-                                                               # yes, twice, to increase the weight
-                                                               '\n'.join(
-                                                                   df_videos_of_single_channels["video_description"]),
-                                                               # '\n'.join(df_comments["comment_text"])  # comments seem to be too noisy
-                                                               ]
-                                                              ),
-                                                    5,
-                                                    5 * n_keywords,  # why 5? because we want to have some redundancy
-                                                    df_videos_of_single_channels["video_channelId"]
-                                                    )
-                                                   for df_videos_of_single_channels in df_videos_of_all_channels_dict.values()
-                                                   ]
+                                                  [(
+                                                      process_text_for_nlp(df=df_videos_of_single_channel),
+                                                      5,
+                                                      5 * n_keywords,  # why 5? because we want to have some redundancy
+                                                      anchor_channel_id
+                                                  )
+                                                      for anchor_channel_id, df_videos_of_single_channel in
+                                                      df_videos_dict.items()
+                                                  ]
                                                   )
                                      )
                                 )
@@ -244,7 +268,19 @@ def community_based_search(*,
 
         # filter out keywords with 1 word, then save only top n_keywords
         df_keywords = df_keywords.loc[
-            df_keywords["Keyword"].apply(lambda v: len(v.split()) > 2)].head(n_keywords)  # don't do one-word searches
+            df_keywords["Keyword"].apply(lambda v: len(v.split()) > 2)]  # don't do one-word searches
+
+        # initialize empty df to store top keywords of all channels
+        df_top_keywords = pd.DataFrame()
+
+        # save for each channel only top n_keywords
+        for anchor_channel_id in df_keywords["anchor_channel_id"].unique():
+            # retrieve keywords data of single channel
+            df_keywords_of_single_channel = df_keywords[df_keywords["anchor_channel_id"] == anchor_channel_id]
+            # retrieve top keywords by sorting by importance
+            df_keywords_of_single_channel.sort_values("Score (the lower the better)", ascending=True)
+            # add to df_top_keywords the top n_keywords of each channel
+            df_top_keywords = pd.concat((df_top_keywords, df_keywords_of_single_channel.head(n_keywords)))
 
         # PART 3 - SEARCH MORE VIDEOS WITH SIMILAR KEYWORDS #
         """ Expand the search to the keywords (we rely on YouTube to give us "relevant" videos). """
@@ -253,8 +289,8 @@ def community_based_search(*,
 
         # search for each keyword its videos (in a parallel process)
         df_more_videos = pd.concat(list(executor.map(get_videos,
-                                                     [(youtube, row["Keyword"], n_videos_per_request, False)
-                                                      for _, row in df_keywords.iterrows()
+                                                     [(youtube, row["Keyword"], row["anchor_channel_id"], n_videos_per_request, False)
+                                                      for _, row in df_top_keywords.iterrows()
                                                       ]
                                                      )
                                         )
@@ -265,8 +301,8 @@ def community_based_search(*,
 
         print(f"Youtube search process for extracted keywords - finished at: \033[1m{datetime.now()}\033[0m")
 
-        # PART 4 - UNION AND PROCESS RESULTS #
-        """ Union channel's videos (and their comments) with keywords' videos (and their comments) and process it. """
+        # PART 4 - UNION RESULTS #
+        """ Union channel's videos (and their comments) with keywords' videos (and their comments). """
 
         # union dfs
         df_all_videos = pd.concat((df_videos, df_more_videos))
@@ -295,61 +331,74 @@ def community_based_search(*,
         # PART 5 - COMMUNITY BASED SEARCH #
         """ Find for every channel the most related channels (by shared commenters). """
 
-        print(f"Community based search - started at: \033[1m{datetime.now()}\033[0m")
-
-        # build social graph edges (where edge = channel and his commenter (i.e. video_channel_id, comment_author_channel_id))
-        df_channel_edges = df_all_comments[['video_channel_id', 'comment_author_channel_id']]
-
-        # count number of interactions between each channel and his commenter (so more active commenters will get a higher score)
-        df_channel_edges = df_channel_edges.groupby(list(df_channel_edges.columns)).agg(len).reset_index(name='n')
+        # initialize empty df to store candidates data (candidates = related channels to given channel)
+        df_candidates = pd.DataFrame()
 
         # anchor the main given channel (the one for which we want to look for similar channels)
-        anchor_channel_id = starting_point.split("/")[-1]
+        for anchor_channel_id in df_top_keywords["anchor_channel_id"].unique():
+            print(f"Community based search for channel {anchor_channel_id} - started at: \033[1m{datetime.now()}\033[0m")
 
-        # friend-of-a-friend search
-        # join different channels based on similar commenters
-        df_fof = df_channel_edges.merge(df_channel_edges, how='outer', on='comment_author_channel_id').drop_duplicates()
+            # build social graph edges (where edge = channel and his commenter (i.e. video_channel_id, comment_author_channel_id))
+            df_channel_edges = df_all_comments[['video_channel_id', 'comment_author_channel_id']][df_all_comments["anchor_channel_id"] == anchor_channel_id]
 
-        # filter out rows where it's the same channel id
-        df_fof = df_fof[df_fof.video_channel_id_x != df_fof.video_channel_id_y]
+            # count number of interactions between each channel and his commenter (so more active commenters will get a higher score)
+            df_channel_edges = df_channel_edges.groupby(list(df_channel_edges.columns)).agg(len).reset_index(name='n')
 
-        # extract channel, related channel (by commenter), and commenter's score (by number of interactions)
-        # for example: [X, Y, 14], [Y, X, 14], [X, Y, 8], [Y, X, 8]
-        # TODO: Consider changing FROM score=row["n_x"]+row["n_y"] TO score=row["n_x"]*row["n_y"]
-        edge_counts = df_fof.apply(lambda row: (frozenset((row["video_channel_id_x"], row["video_channel_id_y"])),
-                                                row["n_x"] + row["n_y"]
-                                                ),
-                                   axis='columns'
-                                   )
+            # friend-of-a-friend search
+            # join different channels based on similar commenters
+            df_fof = df_channel_edges.merge(df_channel_edges, how='outer',
+                                            on='comment_author_channel_id').drop_duplicates()
 
-        # transform the extraction to list
-        edge_counts = [(s, n) for (s, n) in edge_counts]
+            # filter out rows where it's the same channel id
+            df_fof = df_fof[df_fof.video_channel_id_x != df_fof.video_channel_id_y]
 
-        # transform the extraction to df
-        df_edge_counts = pd.DataFrame(edge_counts, columns=['Connection', 'Score'])
+            # extract channel, related channel (by commenter), and commenter's score (by number of interactions)
+            # for example: [X, Y, 14], [Y, X, 14], [X, Y, 8], [Y, X, 8]
+            # TODO: Consider changing FROM score=row["n_x"]+row["n_y"] TO score=row["n_x"]*row["n_y"]
+            edge_counts = df_fof.apply(lambda row: (frozenset((row["video_channel_id_x"], row["video_channel_id_y"])),
+                                                    row["n_x"] + row["n_y"]
+                                                    ),
+                                       axis='columns'
+                                       )
 
-        # sum the score (= total number of interactions based on commenters) between 2 channels
-        # (yes, with this type of calculation - the score is multiplied by 2 since the OUTER JOIN, but it doesn't mean anything... it's for all channels...)
-        df_edge_counts = df_edge_counts.groupby('Connection')['Score'].agg(sum).reset_index()
+            # transform the extraction to list
+            edge_counts = [(s, n) for (s, n) in edge_counts]
 
-        # aggregation and sorting
-        # extract only rows (Connection) which contains the main given channel (anchor_channel_id)
-        df_candidates = df_edge_counts.loc[df_edge_counts["Connection"].apply(lambda c: anchor_channel_id in c)].copy()
+            # transform the extraction to df
+            df_edge_counts = pd.DataFrame(edge_counts, columns=['Connection', 'Score'])
 
-        # add candidate channel (= related channel to anchor_channel_id) (by popping out from every row - the anchor_channel_id)
-        df_candidates['candidate'] = df_candidates["Connection"].apply(
-            lambda s: set(s.difference({anchor_channel_id})).pop())
+            # sum the score (= total number of interactions based on commenters) between 2 channels
+            # (yes, with this type of calculation - the score is multiplied by 2 since the OUTER JOIN, but it doesn't mean anything... it's for all channels...)
+            df_edge_counts = df_edge_counts.groupby('Connection')['Score'].agg(sum).reset_index()
 
-        # sort values by score (~= total number of interactions based on commenters)
-        df_candidates = df_candidates.sort_values('Score', ascending=False).reset_index(drop=True)
+            # aggregation and sorting
+            # extract only rows (Connection) which contains the main given channel (anchor_channel_id)
+            df_candidates_of_single_channel = df_edge_counts.loc[
+                df_edge_counts["Connection"].apply(lambda c: anchor_channel_id in c)].copy()
 
-        # alter candidate channel string to url
-        df_candidates['Channel URL (Output)'] = 'https://www.youtube.com/channel/' + df_candidates['candidate']
+            # add candidate channel (= related channel to anchor_channel_id) (by popping out from every row - the anchor_channel_id)
+            df_candidates_of_single_channel['candidate'] = df_candidates_of_single_channel["Connection"].apply(
+                lambda s: set(s.difference({anchor_channel_id})).pop())
 
-        # return specified n_recommendations
-        df_candidates = df_candidates[['Channel URL (Output)', 'Score']].head(n_recommendations)
+            # sort values by score (~= total number of interactions based on commenters)
+            df_candidates_of_single_channel = df_candidates_of_single_channel.sort_values('Score',
+                                                                                          ascending=False).reset_index(
+                drop=True)
 
-        print(f"Community based search - finished at: \033[1m{datetime.now()}\033[0m")
+            # alter candidate channel string to url
+            df_candidates_of_single_channel['Channel URL (Output)'] = 'https://www.youtube.com/channel/' + \
+                                                                      df_candidates_of_single_channel['candidate']
+
+            # add anchor_channel_id column
+            df_candidates_of_single_channel["Channel URL (Input)"] = f"https://www.youtube.com/channel/{anchor_channel_id}"
+
+            # return specified n_recommendations
+            df_candidates_of_single_channel = df_candidates_of_single_channel[['Channel URL (Input)', 'Channel URL (Output)', 'Score']]
+
+            # add to df_candidates the related channels of each given anchor_channel_id
+            df_candidates = pd.concat((df_candidates, df_candidates_of_single_channel.head(n_recommendations)))
+
+            print(f"Community based search for channel {anchor_channel_id} - finished at: \033[1m{datetime.now()}\033[0m")
 
         return df_candidates
 
