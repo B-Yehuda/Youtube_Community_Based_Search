@@ -321,81 +321,78 @@ def community_based_search(*,
         # PART 5 - COMMUNITY BASED SEARCH #
         """ Find for every channel the most related channels (by shared commenters). """
 
-        # initialize empty df to store candidates data (candidates = channels related to given channel)
-        df_candidates = pd.DataFrame()
-
         # anchor the main given channel (the one for which we want to look for similar channels)
-        for anchor_channel_id in channels_videos_dict.keys():
-            print(
-                f"Community based search for channel {anchor_channel_id} - started at: \033[1m{datetime.now()}\033[0m")
 
-            # build social graph edges (where edge = channel and his commenter (i.e. video_channel_id, comment_author_channel_id))
-            df_channel_edges = df_all_comments[['video_channel_id', 'comment_author_channel_id']][
-                df_all_comments["anchor_channel_id"] == anchor_channel_id]
+        print(
+            f"Community based search for channel  - started at: \033[1m{datetime.now()}\033[0m")
 
-            # count number of interactions between each channel and his commenter (so more active commenters will get a higher score)
-            df_channel_edges = df_channel_edges.groupby(list(df_channel_edges.columns)).agg(len).reset_index(name='n')
+        # build social graph edges (where edge = channel and his commenter (i.e. video_channel_id, comment_author_channel_id))
+        df_channel_edges = df_all_comments[['video_channel_id', 'comment_author_channel_id', 'anchor_channel_id']]
 
-            # friend-of-a-friend search
-            # join different channels based on similar commenters
-            df_fof = df_channel_edges.merge(df_channel_edges, how='outer',
-                                            on='comment_author_channel_id').drop_duplicates()
+        # count number of interactions between each channel and his commenter (so more active commenters will get a higher score)
+        df_channel_edges = df_channel_edges.groupby(list(df_channel_edges.columns)).agg(len).reset_index(name='n')
 
-            # filter out rows where it's the same channel id
-            df_fof = df_fof[df_fof.video_channel_id_x != df_fof.video_channel_id_y]
+        # friend-of-a-friend search
+        # join different channels based on similar commenters
+        df_fof = df_channel_edges.merge(df_channel_edges,
+                                        how='inner',
+                                        on=['comment_author_channel_id', 'anchor_channel_id']
+                                        ).drop_duplicates()
 
-            # extract channel, related channel (by commenter), and commenter's score (by number of interactions)
-            # for example: [X, Y, 14], [Y, X, 14], [X, Y, 8], [Y, X, 8]
-            # TODO: Consider changing FROM score=row["n_x"]+row["n_y"] TO score=row["n_x"]*row["n_y"]
-            edge_counts = df_fof.apply(lambda row: (frozenset((row["video_channel_id_x"], row["video_channel_id_y"])),
-                                                    row["n_x"] + row["n_y"]
-                                                    ),
-                                       axis='columns'
-                                       )
+        # filter out rows where it's the same channel id
+        df_fof = df_fof[df_fof.video_channel_id_x != df_fof.video_channel_id_y]
 
-            # transform the extraction to list
-            edge_counts = [(s, n) for (s, n) in edge_counts]
+        # extract channel, related channel (by commenter), and commenter's score (by number of interactions)
+        # for example: [X, Y, 14], [Y, X, 14], [X, Y, 8], [Y, X, 8]
+        # TODO: Consider changing FROM score=row["n_x"]+row["n_y"] TO score=row["n_x"]*row["n_y"]
+        edge_counts = df_fof.apply(lambda row: (frozenset((row["video_channel_id_x"], row["video_channel_id_y"])),
+                                                row["n_x"] + row["n_y"]
+                                                ),
+                                   axis='columns'
+                                   )
 
-            # transform the extraction to df
-            df_edge_counts = pd.DataFrame(edge_counts, columns=['Connection', 'Score'])
+        # transform the extraction to list
+        edge_counts = [(s, n) for (s, n) in edge_counts]
 
-            # sum the score (= total number of interactions based on commenters) between 2 channels
-            # (yes, with this type of calculation - the score is multiplied by 2 since the OUTER JOIN, but it doesn't mean anything... it's for all channels...)
-            df_edge_counts = df_edge_counts.groupby('Connection')['Score'].agg(sum).reset_index()
+        # transform the extraction to df
+        df_edge_counts = pd.DataFrame(edge_counts, columns=['Connection', 'Score'])
 
-            # aggregation and sorting
-            # extract only rows (Connection) which contains the main given channel (anchor_channel_id)
-            df_candidates_of_single_channel = df_edge_counts.loc[
-                df_edge_counts["Connection"].apply(lambda c: anchor_channel_id in c)].copy()
+        # sum the score (= total number of interactions based on commenters) between 2 channels
+        # (yes, with this type of calculation - the score is multiplied by 2 since the OUTER JOIN, but it doesn't mean anything... it's for all channels...)
+        df_edge_counts = df_edge_counts.groupby('Connection')['Score'].agg(sum).reset_index()
 
-            # add candidate channel (= related channel to anchor_channel_id) (by popping out from every row - the anchor_channel_id)
-            df_candidates_of_single_channel['candidate'] = df_candidates_of_single_channel["Connection"].apply(
-                lambda s: set(s.difference({anchor_channel_id})).pop())
+        # aggregation and sorting
+        # extract only rows (Connection) which contains the main given channel (anchor_channel_id)
+        df_candidates = df_edge_counts.loc[df_edge_counts["Connection"].apply(lambda c: anchor_channel_id in c)].copy()
 
-            # sort values by score (~= total number of interactions based on commenters)
-            df_candidates_of_single_channel = df_candidates_of_single_channel.sort_values('Score',
-                                                                                          ascending=False).reset_index(
-                drop=True)
+        # add candidate channel (= related channel to anchor_channel_id) (by popping out from every row - the anchor_channel_id)
+        df_candidates['candidate'] = df_candidates["Connection"].apply(
+            lambda s: set(s.difference({anchor_channel_id})).pop())
 
-            # alter candidate channel string to url
-            df_candidates_of_single_channel['Channel URL (Output)'] = 'https://www.youtube.com/channel/' + \
-                                                                      df_candidates_of_single_channel['candidate']
+        # sort values by score (~= total number of interactions based on commenters)
+        df_candidates = df_candidates.sort_values('Score',
+                                                  ascending=False).reset_index(
+            drop=True)
 
-            # add anchor_channel_id column
-            df_candidates_of_single_channel[
-                "Channel URL (Input)"] = f"https://www.youtube.com/channel/{anchor_channel_id}"
+        # alter candidate channel string to url
+        df_candidates['Channel URL (Output)'] = 'https://www.youtube.com/channel/' + \
+                                                df_candidates['candidate']
 
-            # return specified n_recommendations
-            df_candidates_of_single_channel = df_candidates_of_single_channel[
-                ['Channel URL (Input)', 'Channel URL (Output)', 'Score']]
+        # add anchor_channel_id column
+        df_candidates[
+            "Channel URL (Input)"] = f"https://www.youtube.com/channel/{anchor_channel_id}"
 
-            # add to df_candidates the related channels of each given anchor_channel_id
-            df_candidates = pd.concat((df_candidates, df_candidates_of_single_channel.head(n_recommendations)))
+        # return specified n_recommendations
+        df_candidates = df_candidates[
+            ['Channel URL (Input)', 'Channel URL (Output)', 'Score']]
 
-            print(
-                f"Community based search for channel {anchor_channel_id} - finished at: \033[1m{datetime.now()}\033[0m")
+        # # add to df_candidates the related channels of each given anchor_channel_id
+        # df_candidates = pd.concat((df_candidates, df_candidates_of_single_channel.head(n_recommendations)))
 
-        return df_candidates
+        print(
+            f"Community based search for channel  - finished at: \033[1m{datetime.now()}\033[0m")
+
+    return df_candidates
 
 
 def content_based_search():
