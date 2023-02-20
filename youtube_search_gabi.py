@@ -363,32 +363,34 @@ def community_based_search(*,
         df_edge_counts = df_edge_counts.groupby(['Connection', 'anchor_channel_id'])['Score'].agg(sum).reset_index()
 
         # aggregation and sorting
+        # change "Connection" column type from frozenset to list
+        df_edge_counts["Connection"] = df_edge_counts["Connection"].apply(set).apply(list)
+
         # extract only rows where "Connection" column contains the main anchor_channel_id
-        df_edge_counts["Connection_set"] = set(df_edge_counts["Connection"])
-        df_edge_counts["anchor_channel_id_set"] = set(df_edge_counts["anchor_channel_id"])
-        df_edge_counts["intersection"] = [len(set(Connection).intersection(set(anchor_channel_id)))
+        df_edge_counts["intersection"] = [len([value for value in Connection if value in anchor_channel_id])
                                           for Connection, anchor_channel_id in
                                           zip(df_edge_counts["Connection"], df_edge_counts["anchor_channel_id"])
                                           ]
 
         df_candidates = df_edge_counts.loc[df_edge_counts["intersection"] > 0].copy()
 
-        # add candidate channel (= related channel to anchor_channel_id) (by popping out from every row - the anchor_channel_id)
-        df_candidates['candidate'] = df_candidates["Connection"].apply(
-            lambda s: set(s.difference({df_candidates["anchor_channel_id"]})).pop())
+        # add candidate channel (= related channel to anchor_channel_id) by popping out from every row - the anchor_channel_id
+        df_candidates['candidate'] = [[value for value in Connection if value not in anchor_channel_id]
+                                      for Connection, anchor_channel_id in
+                                      zip(df_candidates["Connection"], df_candidates["anchor_channel_id"])
+                                      ]
 
         # sort values by score (~= total number of interactions based on commenters)
         df_candidates = df_candidates.sort_values('Score', ascending=False).reset_index(drop=True)
 
-        # alter candidate channel string to url
-        df_candidates['Channel URL (Output)'] = 'https://www.youtube.com/channel/' + df_candidates['candidate']
+        # add candidate channel column
+        df_candidates['Channel URL (Output)'] = 'https://www.youtube.com/channel/' + "".join(df_candidates["candidate"][0])
 
-        # add anchor_channel_id column
+        # add anchor_channel_id channel column
         df_candidates["Channel URL (Input)"] = 'https://www.youtube.com/channel/' + df_candidates["anchor_channel_id"]
 
         # return specified n_recommendations
-        df_candidates = df_candidates[
-            ['Channel URL (Input)', 'Channel URL (Output)', 'Score']]
+        df_candidates = df_candidates[['Channel URL (Input)', 'Channel URL (Output)', 'Score']]
 
         # # add to df_candidates the related channels of each given anchor_channel_id
         # df_candidates = pd.concat((df_candidates, df_candidates_of_single_channel.head(n_recommendations)))
