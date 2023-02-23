@@ -1,5 +1,3 @@
-import ast
-import base64
 import configparser
 import io
 import os
@@ -155,7 +153,7 @@ def predict_acceptance_rate():
         f"Prediction process for pipeline {', '.join(models_name)} ({', '.join(model_types)}) - started at: \033[1m{datetime.now()}\033[0m")
     df = create_predictions_df(df, clf_config)
     print(
-        f"Prediction process for pipeline {', '.join(models_name)} ({', '.join(model_types)}) - finshed at: \033[1m{datetime.now()}\033[0m")
+        f"Prediction process for pipeline {', '.join(models_name)} ({', '.join(model_types)}) - finished at: \033[1m{datetime.now()}\033[0m")
 
     # return predictions
     response = make_response(df.to_csv(index=False))
@@ -273,11 +271,9 @@ def youtube_search():
     stream.seek(0)
     result = transform(stream.read())
 
-    # convert the data into df
+    # convert the data into df and drop duplications
     df_input = pd.read_csv(StringIO(result))
-
-    # # initialize df to store results
-    df_result = pd.DataFrame()
+    df_input = df_input.drop_duplicates()
 
     # define model names/types to use with it
     models_name = ["search"]
@@ -293,7 +289,7 @@ def youtube_search():
     # retrieve YouTube API
     if youtube_config["Model_Location"]["location"] == "GCS":
         credentials = get_vault_secrets()[0]
-        api_key = get_vault_secrets()[1]
+        api_key = get_vault_secrets()[1]["API_KEY"]
     elif youtube_config["Model_Location"]["location"] == "LOCAL":
         credentials = None
         api_key = None
@@ -304,17 +300,19 @@ def youtube_search():
     youtube = build_youtube(api_key=api_key)
 
     # iterate over channels url input and retrieve recommendations (relative channels)
-
-    print(f"Youtube search process for all channels - started at: \033[1m{datetime.now()}\033[0m")
+    print(f"Youtube search process for {len(df_input)} channels - started at: \033[1m{datetime.now()}\033[0m")
     df_result = community_based_search(
         youtube=youtube,
-        df_starting_point=df_input,
+        df_input=df_input,
         n_recommendations=int(youtube_config["Data_Processing"]["n_recommendations"]),
-        n_videos_per_request=int(youtube_config["Data_Processing"]["n_videos_per_request"]),
-        n_comments_per_video=int(youtube_config["Data_Processing"]["n_comments_per_video"])
+        n_videos_per_channel=int(youtube_config["Data_Processing"]["n_videos_per_channel"]),
+        n_comments_per_video_of_channel=int(youtube_config["Data_Processing"]["n_comments_per_video_of_channel"]),
+        n_videos_per_keyword=int(youtube_config["Data_Processing"]["n_videos_per_keyword"]),
+        n_comments_per_video_of_keyword=int(youtube_config["Data_Processing"]["n_comments_per_video_of_keyword"]),
+        keyword_target_length=int(youtube_config["Data_Processing"]["keyword_target_length"]),
+        n_keywords=int(youtube_config["Data_Processing"]["n_keywords"])
     )
-
-    print(f"Youtube search process for all channels - finished at: \033[1m{datetime.now()}\033[0m")
+    print(f"Youtube search process for {len(df_input)} channels - finished at: \033[1m{datetime.now()}\033[0m")
 
     # prepare df to redshift (extract provider_id from given url --> so we can join bi_db.creators.provider_id)
     df_result["provider_id"] = df_result["Channel URL (Output)"].str.split('/').str[-1]
