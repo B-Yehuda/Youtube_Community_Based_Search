@@ -21,7 +21,6 @@ def build_youtube(api_key=None):
         A function that construct a YouTube Resource object for interacting with an API.
     """
 
-    # TODO: Get YouTube API key from GCS
     # retrieve YouTube API key
     if api_key is None:
         # navigate to parent dir
